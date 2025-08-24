@@ -53,10 +53,6 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
     float JumpForce = 600.f;
 
-    // Points
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Player|Params")
-    int32 Points = 0;
-
     // -----------------------------
     // Components (created in C++)
     // -----------------------------

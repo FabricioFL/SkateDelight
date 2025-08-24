@@ -73,7 +73,6 @@ AAPlayer::AAPlayer()
     // runtime state defaults
     bIsRidingSkate = false;
     CurrentSkateSpeed = 0.f;
-    Points = 0;
 
     // Ensure skeletal mesh is set up for animations
     GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
@@ -272,10 +271,6 @@ void AAPlayer::PerformJump()
             LaunchCharacter(Fwd * 300.f, true, false);
             LOG_SKATE("Speed Jump (speed=%.1f, riding=%d)", CurrentSkateSpeed, bIsRidingSkate ? 1 : 0);
         }
-
-        // award points
-        Points += 10;
-        LOG_SKATE("Points=%d", Points);
     }
 
     // Force jump animation
