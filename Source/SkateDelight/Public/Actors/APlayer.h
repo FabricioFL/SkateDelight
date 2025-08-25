@@ -135,6 +135,11 @@ private:
     // Animation state
     FName CurrentAnimationState = NAME_None;
 
+    // To prevent cutting animations
+    float CurrentAnimEndTime = 0.f;
+
+    bool bInPriorityAnimation = false;
+
     // -----------------------------
     // Input handlers
     // -----------------------------
@@ -156,6 +161,6 @@ private:
     void HandleSkateMovement(float DeltaTime);
 
     // Animation helpers
-    void PlayAnimation(UAnimSequence* AnimSequence, bool bLoop = true);
+    void PlayAnimation(UAnimSequence* AnimSequence, bool bLoop = true, bool bPriority = false);
     void UpdateAnimationState();
 };

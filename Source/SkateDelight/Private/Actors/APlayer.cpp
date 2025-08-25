@@ -206,6 +206,8 @@ void AAPlayer::LookUp(float Value)
 // -----------------------------
 void AAPlayer::AccelerateTap()
 {
+    if (bInPriorityAnimation) return; // No input during priority animations
+
     if (!bIsRidingSkate)
     {
         MountSkate();
@@ -228,6 +230,8 @@ void AAPlayer::AccelerateTap()
 
 void AAPlayer::BrakeTap()
 {
+    if (bInPriorityAnimation) return; // No input during priority animations
+
     if (bIsRidingSkate)
     {
         CurrentSkateSpeed = FMath::Clamp(
@@ -239,10 +243,13 @@ void AAPlayer::BrakeTap()
         {
             DismountSkate();
         }
-        if (SlowdownAnim && AnimInstance)
+        else
         {
-            PlayAnimation(SlowdownAnim, false);
-            CurrentAnimationState = TEXT("Slowdown");
+            if (SlowdownAnim && AnimInstance)
+            {
+                PlayAnimation(SlowdownAnim, false);
+                CurrentAnimationState = TEXT("Slowdown");
+            }
         }
         LOG_SKATE("BrakeTap: speed=%.1f", CurrentSkateSpeed);
     }
@@ -254,6 +261,8 @@ void AAPlayer::BrakeTap()
 // -----------------------------
 void AAPlayer::PerformJump()
 {
+    if (bInPriorityAnimation) return; // No jump during priority animations
+
     if (bIsRidingSkate || !bIsRidingSkate)
     {
         const float SpeedThreshold = BaseSkateSpeed * 1.05f; // small tolerance
@@ -273,16 +282,16 @@ void AAPlayer::PerformJump()
         }
     }
 
-    // Force jump animation
+    // Force jump animation with priority
     if (JumpAnim && AnimInstance)
     {
-        PlayAnimation(JumpAnim, false);
+        PlayAnimation(JumpAnim, false, true); // Priority = true for jump
         CurrentAnimationState = TEXT("Jump");
     }
 }
 
 // -----------------------------
-// Mount/Dismount & movement
+// Skate helpers
 // -----------------------------
 void AAPlayer::MountSkate()
 {
@@ -379,11 +388,14 @@ void AAPlayer::HandleSkateMovement(float DeltaTime)
 // -----------------------------
 // Animation helpers
 // -----------------------------
-void AAPlayer::PlayAnimation(UAnimSequence* AnimSequence, bool bLoop)
+void AAPlayer::PlayAnimation(UAnimSequence* AnimSequence, bool bLoop, bool bPriority)
 {
     if (AnimInstance && AnimSequence)
     {
         GetMesh()->PlayAnimation(AnimSequence, bLoop);
+        float PlayLength = AnimSequence->GetPlayLength();
+        CurrentAnimEndTime = GetWorld()->GetTimeSeconds() + PlayLength;
+        bInPriorityAnimation = bPriority;
     }
 }
 
@@ -392,11 +404,21 @@ void AAPlayer::UpdateAnimationState()
     if (!AnimInstance || !GetCharacterMovement())
         return;
 
+    float CurrentTime = GetWorld()->GetTimeSeconds();
+    if (CurrentTime < CurrentAnimEndTime)
+    {
+        // Do not interrupt ongoing animation
+        return;
+    }
+
+    // Reset priority after animation finishes
+    bInPriorityAnimation = false;
+
     if (GetCharacterMovement()->IsFalling())
     {
         if (JumpAnim && CurrentAnimationState != TEXT("Jump"))
         {
-            PlayAnimation(JumpAnim, true);
+            PlayAnimation(JumpAnim, false, true); // Priority for jump
             CurrentAnimationState = TEXT("Jump");
         }
         return;
@@ -429,7 +451,7 @@ void AAPlayer::UpdateAnimationState()
         {
             if (SpeedupAnim && CurrentAnimationState != TEXT("Speedup"))
             {
-                PlayAnimation(SpeedupAnim, true);
+                PlayAnimation(SpeedupAnim, false);
                 CurrentAnimationState = TEXT("Speedup");
             }
         }
@@ -437,7 +459,7 @@ void AAPlayer::UpdateAnimationState()
         {
             if (SlowdownAnim && CurrentAnimationState != TEXT("Slowdown"))
             {
-                PlayAnimation(SlowdownAnim, true);
+                PlayAnimation(SlowdownAnim, false);
                 CurrentAnimationState = TEXT("Slowdown");
             }
         }
