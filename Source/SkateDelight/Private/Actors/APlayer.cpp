@@ -9,7 +9,7 @@
 #include "Animation/AnimInstance.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "TimerManager.h"
-#include "UI/ScoreHud.h" // Include for Slate HUD
+#include "UI/ScoreHud.h"
 #include "SlateBasics.h"
 
 #define LOG_SKATE(Format, ...) UE_LOG(LogTemp, Log, TEXT("Skate: " Format), ##__VA_ARGS__)
@@ -129,14 +129,24 @@ void AAPlayer::BeginPlay()
     {
         AnimInstance = SkelMesh->GetAnimInstance();
         LOG_SKATE("BeginPlay: AnimInstance initialized=%d", AnimInstance != nullptr);
+        if (!AnimInstance)
+        {
+            LOG_SKATE("Error: AnimInstance is null. Check if skeletal mesh is properly configured.");
+        }
     }
 
     // Start with idle animation
     if (IdleAnim && AnimInstance)
     {
-        PlayAnimation(IdleAnim, true);
+        PlayAnimation(IdleAnim, true, false);
         CurrentAnimationState = TEXT("Idle");
-        CurrentAnimEndTime = 0.f; // Allow immediate transition
+        CurrentAnimEndTime = 0.f; // Looping animations don't need end time
+        LOG_SKATE("BeginPlay: Starting Idle animation");
+    }
+    else
+    {
+        LOG_SKATE("BeginPlay: Failed to start Idle animation. IdleAnim=%d, AnimInstance=%d",
+            IdleAnim != nullptr, AnimInstance != nullptr);
     }
 
     // Schedule an immediate animation state update
@@ -223,7 +233,8 @@ void AAPlayer::LookUp(float Value)
 // -----------------------------
 void AAPlayer::AccelerateTap()
 {
-    if (bInPriorityAnimation) return; // No input during priority animations
+    // Only block if in Jump animation
+    if (CurrentAnimationState == TEXT("Jump")) return;
 
     if (!bIsRidingSkate)
     {
@@ -236,9 +247,9 @@ void AAPlayer::AccelerateTap()
             BaseSkateSpeed,
             BaseSkateSpeed * MaxSkateSpeedMultiplier
         );
-        if (SpeedupAnim && AnimInstance)
+        if (SpeedupAnim && AnimInstance && CurrentAnimationState != TEXT("Jump"))
         {
-            PlayAnimation(SpeedupAnim, false);
+            PlayAnimation(SpeedupAnim, false, false);
             CurrentAnimationState = TEXT("Speedup");
         }
         LOG_SKATE("AccelerateTap: speed=%.1f", CurrentSkateSpeed);
@@ -247,7 +258,8 @@ void AAPlayer::AccelerateTap()
 
 void AAPlayer::BrakeTap()
 {
-    if (bInPriorityAnimation) return; // No input during priority animations
+    // Only block if in Jump animation
+    if (CurrentAnimationState == TEXT("Jump")) return;
 
     if (bIsRidingSkate)
     {
@@ -262,9 +274,9 @@ void AAPlayer::BrakeTap()
         }
         else
         {
-            if (SlowdownAnim && AnimInstance)
+            if (SlowdownAnim && AnimInstance && CurrentAnimationState != TEXT("Jump"))
             {
-                PlayAnimation(SlowdownAnim, false);
+                PlayAnimation(SlowdownAnim, false, false);
                 CurrentAnimationState = TEXT("Slowdown");
             }
         }
@@ -277,8 +289,7 @@ void AAPlayer::BrakeTap()
 // -----------------------------
 void AAPlayer::PerformJump()
 {
-    if (bInPriorityAnimation) return; // No jump during priority animations
-
+    // Jump always executes, overriding all other actions
     if (bIsRidingSkate || !bIsRidingSkate)
     {
         const float SpeedThreshold = BaseSkateSpeed * 1.05f; // small tolerance
@@ -305,7 +316,7 @@ void AAPlayer::PerformJump()
         CurrentAnimationState = TEXT("Jump");
     }
 
-    // --- Notify listeners (JumpScoreZone) without altering existing behavior ---
+    // Notify listeners (JumpScoreZone)
     OnPlayerJumped.Broadcast();
     LOG_SKATE("Broadcast: OnPlayerJumped");
 }
@@ -337,12 +348,12 @@ void AAPlayer::MountSkate()
 
     if (MountAnim && AnimInstance)
     {
-        PlayAnimation(MountAnim, false);
+        PlayAnimation(MountAnim, false, true);
         CurrentAnimationState = TEXT("Mount");
     }
     else if (SkateboardingAnim && AnimInstance)
     {
-        PlayAnimation(SkateboardingAnim, true);
+        PlayAnimation(SkateboardingAnim, true, false);
         CurrentAnimationState = TEXT("Skateboarding");
     }
 
@@ -364,6 +375,7 @@ void AAPlayer::DismountSkate()
     if (GetCharacterMovement())
     {
         GetCharacterMovement()->MaxWalkSpeed = BaseWalkSpeed;
+        GetCharacterMovement()->Velocity = FVector::ZeroVector; // Stop all movement
     }
 
     SkateMountedMesh->SetVisibility(false);
@@ -373,14 +385,22 @@ void AAPlayer::DismountSkate()
 
     if (DismountAnim && AnimInstance)
     {
-        PlayAnimation(DismountAnim, false);
+        PlayAnimation(DismountAnim, false, true);
         CurrentAnimationState = TEXT("Dismount");
+        // Schedule movement re-enable after dismount duration (93 frames / (30fps * 5.0 rate) = 0.62s)
+        FTimerHandle TimerHandle;
+        GetWorld()->GetTimerManager().SetTimer(
+            TimerHandle,
+            [this]() { bCanMove = true; LOG_SKATE("Dismount: Movement re-enabled after animation"); },
+            0.62f,
+            false // One-shot timer
+        );
     }
     else if (WalkingAnim && AnimInstance)
     {
-        PlayAnimation(WalkingAnim, true);
+        PlayAnimation(WalkingAnim, true, false);
         CurrentAnimationState = TEXT("Walking");
-        bCanMove = true; // Re-enable movement if no dismount animation
+        bCanMove = true;
     }
 
     LOG_SKATE("Dismounted skate. Now walking (BaseWalkSpeed=%.1f, CanMove=%d)", BaseWalkSpeed, bCanMove ? 1 : 0);
@@ -413,58 +433,76 @@ void AAPlayer::HandleSkateMovement(float DeltaTime)
 // -----------------------------
 void AAPlayer::PlayAnimation(UAnimSequence* AnimSequence, bool bLoop, bool bPriority)
 {
-    if (AnimInstance && AnimSequence)
+    if (!AnimInstance)
     {
-        GetMesh()->PlayAnimation(AnimSequence, bLoop);
-        float PlayLength = AnimSequence->GetPlayLength();
-        CurrentAnimEndTime = GetWorld()->GetTimeSeconds() + PlayLength;
-        bInPriorityAnimation = bPriority;
-        LOG_SKATE("Playing animation: %s, Loop=%d, Priority=%d, Duration=%.2f", *AnimSequence->GetName(), bLoop, bPriority, PlayLength);
+        LOG_SKATE("PlayAnimation failed: AnimInstance is null");
+        return;
     }
-    else
+    if (!AnimSequence)
     {
-        LOG_SKATE("PlayAnimation failed: AnimInstance=%d, AnimSequence=%d", AnimInstance != nullptr, AnimSequence != nullptr);
+        LOG_SKATE("PlayAnimation failed: AnimSequence is null");
+        return;
     }
+
+    // Apply blend time for smooth transitions
+    const float BlendTime = 0.2f;
+    GetMesh()->PlayAnimation(AnimSequence, bLoop);
+    float PlayLength = (AnimSequence->GetPlayLength() / AnimSequence->RateScale) + (bLoop ? 0.f : BlendTime);
+    CurrentAnimEndTime = bLoop ? 0.f : GetWorld()->GetTimeSeconds() + PlayLength;
+    bInPriorityAnimation = bPriority;
+    LOG_SKATE("Playing animation: %s, Loop=%d, Priority=%d, Duration=%.2f, RateScale=%.2f, BlendTime=%.2f",
+        *AnimSequence->GetName(), bLoop, bPriority, PlayLength, AnimSequence->RateScale, BlendTime);
 }
 
 void AAPlayer::UpdateAnimationState()
 {
     if (!AnimInstance || !GetCharacterMovement())
     {
-        LOG_SKATE("UpdateAnimationState: AnimInstance or CharacterMovement missing");
+        LOG_SKATE("UpdateAnimationState: AnimInstance=%d, CharacterMovement=%d",
+            AnimInstance != nullptr, GetCharacterMovement() != nullptr);
         return;
     }
 
     float CurrentTime = GetWorld()->GetTimeSeconds();
-    if (CurrentTime < CurrentAnimEndTime)
+    // Check if current non-looping animation has finished
+    if (CurrentAnimEndTime > 0.f && CurrentTime >= CurrentAnimEndTime)
     {
-        LOG_SKATE("UpdateAnimationState: Waiting for animation %s to finish (%.2f/%.2f)", *CurrentAnimationState.ToString(), CurrentTime, CurrentAnimEndTime);
-        // Re-enable movement after dismount animation
-        if (CurrentAnimationState == TEXT("Dismount") && !bCanMove)
+        bInPriorityAnimation = false; // Reset priority for non-looping animations
+        CurrentAnimationState = NAME_None; // Clear state to force transition
+        LOG_SKATE("UpdateAnimationState: Animation %s finished, resetting state", *CurrentAnimationState.ToString());
+    }
+
+    // Jump has highest priority and can interrupt any animation
+    if (GetCharacterMovement()->IsFalling() && CurrentAnimationState != TEXT("Jump"))
+    {
+        if (JumpAnim && AnimInstance)
         {
-            bCanMove = true;
-            LOG_SKATE("UpdateAnimationState: Re-enabled movement after Dismount");
+            PlayAnimation(JumpAnim, false, true);
+            CurrentAnimationState = TEXT("Jump");
+            LOG_SKATE("UpdateAnimationState: Transition to Jump (falling)");
         }
         return;
     }
 
-    // Reset priority after animation finishes
-    bInPriorityAnimation = false;
-    bCanMove = true; // Ensure movement is enabled after non-priority animations
-
-    if (GetCharacterMovement()->IsFalling())
+    // If not falling and jump animation is active, transition out
+    if (CurrentAnimationState == TEXT("Jump") && !GetCharacterMovement()->IsFalling())
     {
-        if (JumpAnim && CurrentAnimationState != TEXT("Jump"))
-        {
-            PlayAnimation(JumpAnim, false, true);
-            CurrentAnimationState = TEXT("Jump");
-            LOG_SKATE("UpdateAnimationState: Transition to Jump");
-        }
+        bInPriorityAnimation = false; // Ensure jump priority is cleared
+        CurrentAnimationState = NAME_None; // Force transition to next state
+        LOG_SKATE("UpdateAnimationState: Jump ended, forcing state transition");
+    }
+
+    // Skip state updates during priority animations (Mount, Dismount, Jump)
+    if (bInPriorityAnimation && CurrentAnimationState != NAME_None)
+    {
+        LOG_SKATE("UpdateAnimationState: Waiting for priority animation %s (%.2f/%.2f)",
+            *CurrentAnimationState.ToString(), CurrentTime, CurrentAnimEndTime);
         return;
     }
 
     float Speed = GetVelocity().Size2D();
-    LOG_SKATE("UpdateAnimationState: Velocity=%.2f, Riding=%d, CanMove=%d", Speed, bIsRidingSkate ? 1 : 0, bCanMove ? 1 : 0);
+    LOG_SKATE("UpdateAnimationState: Velocity=%.2f, Riding=%d, CanMove=%d",
+        Speed, bIsRidingSkate ? 1 : 0, bCanMove ? 1 : 0);
 
     if (!bIsRidingSkate)
     {
@@ -472,7 +510,7 @@ void AAPlayer::UpdateAnimationState()
         {
             if (WalkingAnim && CurrentAnimationState != TEXT("Walking"))
             {
-                PlayAnimation(WalkingAnim, true);
+                PlayAnimation(WalkingAnim, true, false);
                 CurrentAnimationState = TEXT("Walking");
                 LOG_SKATE("UpdateAnimationState: Transition to Walking");
             }
@@ -481,7 +519,7 @@ void AAPlayer::UpdateAnimationState()
         {
             if (IdleAnim && CurrentAnimationState != TEXT("Idle"))
             {
-                PlayAnimation(IdleAnim, true);
+                PlayAnimation(IdleAnim, true, false);
                 CurrentAnimationState = TEXT("Idle");
                 LOG_SKATE("UpdateAnimationState: Transition to Idle");
             }
@@ -489,31 +527,35 @@ void AAPlayer::UpdateAnimationState()
     }
     else
     {
-        if (CurrentSkateSpeed > BaseSkateSpeed * 1.2f)
+        // Speedup/Slowdown can override Skateboarding but not Jump/Mount/Dismount
+        if (CurrentAnimationState != TEXT("Jump") && CurrentAnimationState != TEXT("Mount") && CurrentAnimationState != TEXT("Dismount"))
         {
-            if (SpeedupAnim && CurrentAnimationState != TEXT("Speedup"))
+            if (CurrentSkateSpeed > BaseSkateSpeed * 1.2f)
             {
-                PlayAnimation(SpeedupAnim, false);
-                CurrentAnimationState = TEXT("Speedup");
-                LOG_SKATE("UpdateAnimationState: Transition to Speedup");
+                if (SpeedupAnim && CurrentAnimationState != TEXT("Speedup"))
+                {
+                    PlayAnimation(SpeedupAnim, false, false);
+                    CurrentAnimationState = TEXT("Speedup");
+                    LOG_SKATE("UpdateAnimationState: Transition to Speedup");
+                }
             }
-        }
-        else if (CurrentSkateSpeed < BaseSkateSpeed * 0.8f)
-        {
-            if (SlowdownAnim && CurrentAnimationState != TEXT("Slowdown"))
+            else if (CurrentSkateSpeed < BaseSkateSpeed * 0.8f)
             {
-                PlayAnimation(SlowdownAnim, false);
-                CurrentAnimationState = TEXT("Slowdown");
-                LOG_SKATE("UpdateAnimationState: Transition to Slowdown");
+                if (SlowdownAnim && CurrentAnimationState != TEXT("Slowdown"))
+                {
+                    PlayAnimation(SlowdownAnim, false, false);
+                    CurrentAnimationState = TEXT("Slowdown");
+                    LOG_SKATE("UpdateAnimationState: Transition to Slowdown");
+                }
             }
-        }
-        else
-        {
-            if (SkateboardingAnim && CurrentAnimationState != TEXT("Skateboarding"))
+            else
             {
-                PlayAnimation(SkateboardingAnim, true);
-                CurrentAnimationState = TEXT("Skateboarding");
-                LOG_SKATE("UpdateAnimationState: Transition to Skateboarding");
+                if (SkateboardingAnim && CurrentAnimationState != TEXT("Skateboarding"))
+                {
+                    PlayAnimation(SkateboardingAnim, true, false);
+                    CurrentAnimationState = TEXT("Skateboarding");
+                    LOG_SKATE("UpdateAnimationState: Transition to Skateboarding");
+                }
             }
         }
     }
