@@ -346,7 +346,7 @@ void AAPlayer::PerformJump()
     FVector LowSpeedImpulse = Up * VerticalBoost;
 
     // Add stronger forward scaling at high speeds (×1.5)
-    FVector HighSpeedImpulse = (Fwd * ForwardBoost * 1.5f) + (Up * VerticalBoost * 0.8f);
+    FVector HighSpeedImpulse = (Fwd * ForwardBoost * 3.5f) + (Up * VerticalBoost * 0.8f);
 
     FVector FinalImpulse = FMath::Lerp(LowSpeedImpulse, HighSpeedImpulse, SpeedRatio);
 
