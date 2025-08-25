@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "UObject/ObjectMacros.h"
+#include "UObject/ScriptMacros.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimSequence.h"
 #include "APlayer.generated.h"
@@ -10,9 +12,8 @@ class USpringArmComponent;
 class UCameraComponent;
 class UStaticMeshComponent;
 class UStaticMesh;
-class SScoreHud; // Forward declaration for Slate HUD
+class SScoreHud;
 
-// Added for JumpScoreZone binding
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPlayerJumped);
 
 UCLASS()
@@ -30,76 +31,60 @@ public:
     virtual void Tick(float DeltaTime) override;
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
-    // -----------------------------
-    // Tunable params (edit in editor)
-    // -----------------------------
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
     float BaseWalkSpeed = 300.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
     float BaseSkateSpeed = 600.f;
 
-    // Max multiplier (2x -> set to 2.0)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
     float MaxSkateSpeedMultiplier = 2.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
-    float SkateAccelBurst = 100.f; // Speed increase per tap
+    float SkateAccelBurst = 100.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
-    float SkateDecelBurst = 150.f; // Speed decrease per tap
+    float SkateDecelBurst = 150.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
-    float FrictionDecelRate = 100.f; // Passive deceleration per second
+    float FrictionDecelRate = 100.f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Player|Params")
     float JumpForce = 600.f;
 
-    // -----------------------------
-    // Components (created in C++)
-    // -----------------------------
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera", meta = (AllowPrivateAccess = "true"))
     USpringArmComponent* CameraBoom = nullptr;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera", meta = (AllowPrivateAccess = "true"))
     UCameraComponent* FollowCamera = nullptr;
 
-    /** Static mesh component for skate when mounted (under feet). */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Skate", meta = (AllowPrivateAccess = "true"))
     UStaticMeshComponent* SkateMountedMesh = nullptr;
 
-    /** Static mesh component for skate when unmounted (in hand). */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Skate", meta = (AllowPrivateAccess = "true"))
     UStaticMeshComponent* SkateUnmountedMesh = nullptr;
 
-    /** Asset you can drop into the actor defaults / blueprint to set the skateboard mesh. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skate")
     UStaticMesh* SkateMeshAsset = nullptr;
 
-    /** Local transform offsets for mounted skate (tweak in editor). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skate")
     FVector SkateMountedRelativeLocation = FVector(30.f, 0.f, -90.f);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skate")
-    FRotator SkateMountedRelativeRotation = FRotator(0.f, 90.f, 0.f); // Adjusted for 90 degrees on horizontal axis
+    FRotator SkateMountedRelativeRotation = FRotator(0.f, 90.f, 0.f);
 
-    /** Local transform offsets for unmounted skate (tweak in editor). */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skate")
     FVector SkateUnmountedRelativeLocation = FVector(-60.39f, 12.f, 180.f);
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Skate")
     FRotator SkateUnmountedRelativeRotation = FRotator(-40.50f, 0.f, 17.27f);
 
-    // -----------------------------
-    // Runtime state (read-only)
-    // -----------------------------
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Player|State")
     bool bIsRidingSkate = false;
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Player|State")
     float CurrentSkateSpeed = 0.f;
 
-    // Animation sequences (assign in editor or load dynamically)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
     class UAnimSequence* IdleAnim = nullptr;
 
@@ -118,67 +103,49 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
     class UAnimSequence* JumpAnim = nullptr;
 
-    // Slots for more animations (e.g., mount, dismount, etc.)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
     class UAnimSequence* MountAnim = nullptr;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
     class UAnimSequence* DismountAnim = nullptr;
 
-    // -----------------------------
-    // Score & events (added for JumpScoreZone)
-    // -----------------------------
-public:
-    /** Broadcast whenever this player performs a jump (used by JumpScoreZone). */
     UPROPERTY(BlueprintAssignable, Category = "Player|Events")
     FOnPlayerJumped OnPlayerJumped;
 
-    /** Public method for zones to award points to the player. */
     UFUNCTION(BlueprintCallable, Category = "Player|Score")
     void AddScore(int32 Amount);
 
-    /** Inspectable score value. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Player|Score")
     int32 Score = 0;
 
 private:
-    // Input state
-    bool bWantsAccelerate = false;
-    bool bWantsBrake = false;
-    bool bCanMove = true; // Controls whether movement input is allowed
-
-    // Animation
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation", meta = (AllowPrivateAccess = "true"))
-    class UAnimInstance* AnimInstance = nullptr;
-
-    // Animation state
-    FName CurrentAnimationState = NAME_None;
-    float CurrentAnimEndTime = 0.f;
-    bool bInPriorityAnimation = false;
-
-    // HUD
-    TSharedPtr<class SScoreHud> ScoreHud; // Slate HUD for score display
-
-    // -----------------------------
-    // Input handlers
-    // -----------------------------
     void MoveForward(float Value);
     void MoveRight(float Value);
     void Turn(float Value);
     void LookUp(float Value);
-
-    void AccelerateTap(); // LShift pressed for burst
-    void BrakeTap();      // LCtrl pressed for burst
+    void AccelerateTap();
+    void BrakeTap();
     void PerformJump();
-
-    // -----------------------------
-    // Skate helpers
-    // -----------------------------
     void MountSkate();
     void DismountSkate();
     void HandleSkateMovement(float DeltaTime);
-
-    // Animation helpers
     void PlayAnimation(UAnimSequence* AnimSequence, bool bLoop = true, bool bPriority = false);
     void UpdateAnimationState();
+
+    bool bWantsAccelerate = false;
+    bool bWantsBrake = false;
+    bool bCanMove = true;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation", meta = (AllowPrivateAccess = "true"))
+    class UAnimInstance* AnimInstance = nullptr;
+
+    FName CurrentAnimationState = NAME_None;
+    float CurrentAnimEndTime = 0.f;
+    bool bInPriorityAnimation = false;
+
+    TSharedPtr<class SScoreHud> ScoreHud;
+
+    float LastSpeedupTime = 0.f;
+    float LastSlowdownTime = 0.f;
+    float LastJumpTime = 0.f;
 };
