@@ -1,5 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -12,6 +10,10 @@ class USpringArmComponent;
 class UCameraComponent;
 class UStaticMeshComponent;
 class UStaticMesh;
+class SScoreHud; // Forward declaration for Slate HUD
+
+// Added for JumpScoreZone binding
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPlayerJumped);
 
 UCLASS()
 class SKATEDELIGHT_API AAPlayer : public ACharacter
@@ -123,10 +125,27 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Animation")
     class UAnimSequence* DismountAnim = nullptr;
 
+    // -----------------------------
+    // Score & events (added for JumpScoreZone)
+    // -----------------------------
+public:
+    /** Broadcast whenever this player performs a jump (used by JumpScoreZone). */
+    UPROPERTY(BlueprintAssignable, Category = "Player|Events")
+    FOnPlayerJumped OnPlayerJumped;
+
+    /** Public method for zones to award points to the player. */
+    UFUNCTION(BlueprintCallable, Category = "Player|Score")
+    void AddScore(int32 Amount);
+
+    /** Inspectable score value. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Player|Score")
+    int32 Score = 0;
+
 private:
     // Input state
     bool bWantsAccelerate = false;
     bool bWantsBrake = false;
+    bool bCanMove = true; // Controls whether movement input is allowed
 
     // Animation
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation", meta = (AllowPrivateAccess = "true"))
@@ -134,11 +153,11 @@ private:
 
     // Animation state
     FName CurrentAnimationState = NAME_None;
-
-    // To prevent cutting animations
     float CurrentAnimEndTime = 0.f;
-
     bool bInPriorityAnimation = false;
+
+    // HUD
+    TSharedPtr<class SScoreHud> ScoreHud; // Slate HUD for score display
 
     // -----------------------------
     // Input handlers
@@ -150,7 +169,6 @@ private:
 
     void AccelerateTap(); // LShift pressed for burst
     void BrakeTap();      // LCtrl pressed for burst
-
     void PerformJump();
 
     // -----------------------------

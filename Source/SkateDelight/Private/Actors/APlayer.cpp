@@ -1,7 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
-#include "Actors/APlayer.h"
-
+﻿#include "Actors/APlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -11,6 +8,9 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Animation/AnimInstance.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "TimerManager.h"
+#include "UI/ScoreHud.h" // Include for Slate HUD
+#include "SlateBasics.h"
 
 #define LOG_SKATE(Format, ...) UE_LOG(LogTemp, Log, TEXT("Skate: " Format), ##__VA_ARGS__)
 
@@ -66,13 +66,14 @@ AAPlayer::AAPlayer()
         GetCharacterMovement()->bOrientRotationToMovement = true;
         GetCharacterMovement()->RotationRate = FRotator(0.f, 540.f, 0.f);
         GetCharacterMovement()->AirControl = 0.2f;
-        GetCharacterMovement()->MaxWalkSpeed = BaseWalkSpeed; // set a safe default at construction time
+        GetCharacterMovement()->MaxWalkSpeed = BaseWalkSpeed;
         GetCharacterMovement()->JumpZVelocity = JumpForce;
     }
 
     // runtime state defaults
     bIsRidingSkate = false;
     CurrentSkateSpeed = 0.f;
+    bCanMove = true;
 
     // Ensure skeletal mesh is set up for animations
     GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
@@ -82,7 +83,7 @@ void AAPlayer::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Force possession of player 0 (keep behaviour)
+    // Force possession of player 0
     if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
     {
         if (PC->GetPawn() != this)
@@ -91,6 +92,12 @@ void AAPlayer::BeginPlay()
         }
         PC->bShowMouseCursor = false;
         PC->SetInputMode(FInputModeGameOnly());
+
+        // Create and add Slate HUD
+        ScoreHud = SNew(SScoreHud);
+        GEngine->GameViewport->AddViewportWidgetContent(ScoreHud.ToSharedRef());
+        ScoreHud->UpdateScore(Score);
+        LOG_SKATE("ScoreHud created and added to viewport, initial score: %d", Score);
     }
 
     // Assign a static mesh asset to the runtime components if the asset property is set
@@ -115,11 +122,13 @@ void AAPlayer::BeginPlay()
     SkateUnmountedMesh->SetVisibility(true);
     bIsRidingSkate = false;
     CurrentSkateSpeed = 0.f;
+    bCanMove = true;
 
     // Get the AnimInstance from the skeletal mesh
     if (USkeletalMeshComponent* SkelMesh = GetMesh())
     {
         AnimInstance = SkelMesh->GetAnimInstance();
+        LOG_SKATE("BeginPlay: AnimInstance initialized=%d", AnimInstance != nullptr);
     }
 
     // Start with idle animation
@@ -127,6 +136,13 @@ void AAPlayer::BeginPlay()
     {
         PlayAnimation(IdleAnim, true);
         CurrentAnimationState = TEXT("Idle");
+        CurrentAnimEndTime = 0.f; // Allow immediate transition
+    }
+
+    // Schedule an immediate animation state update
+    if (GetWorld())
+    {
+        GetWorld()->GetTimerManager().SetTimerForNextTick(this, &AAPlayer::UpdateAnimationState);
     }
 
     LOG_SKATE("BeginPlay: BaseWalk=%.1f SkateBase=%.1f", BaseWalkSpeed, BaseSkateSpeed);
@@ -136,7 +152,7 @@ void AAPlayer::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // tick skate movement only when riding
+    // Tick skate movement only when riding
     if (bIsRidingSkate)
     {
         HandleSkateMovement(DeltaTime);
@@ -159,7 +175,6 @@ void AAPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 
     // skate actions (make sure your DefaultInput.ini maps these)
     PlayerInputComponent->BindAction("SkateAccelerate", IE_Pressed, this, &AAPlayer::AccelerateTap);
-
     PlayerInputComponent->BindAction("SkateBrake", IE_Pressed, this, &AAPlayer::BrakeTap);
 
     // jump
@@ -171,23 +186,25 @@ void AAPlayer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 // -----------------------------
 void AAPlayer::MoveForward(float Value)
 {
-    if (Controller && Value != 0.f)
+    if (Controller && Value != 0.f && bCanMove)
     {
         const FRotator ControlRot = Controller->GetControlRotation();
         const FRotator YawRot(0.f, ControlRot.Yaw, 0.f);
         const FVector Dir = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X);
         AddMovementInput(Dir, Value);
+        LOG_SKATE("MoveForward: Value=%.2f", Value);
     }
 }
 
 void AAPlayer::MoveRight(float Value)
 {
-    if (Controller && Value != 0.f)
+    if (Controller && Value != 0.f && bCanMove)
     {
         const FRotator ControlRot = Controller->GetControlRotation();
         const FRotator YawRot(0.f, ControlRot.Yaw, 0.f);
         const FVector Dir = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y);
         AddMovementInput(Dir, Value);
+        LOG_SKATE("MoveRight: Value=%.2f", Value);
     }
 }
 
@@ -253,7 +270,6 @@ void AAPlayer::BrakeTap()
         }
         LOG_SKATE("BrakeTap: speed=%.1f", CurrentSkateSpeed);
     }
-    // No effect if unmounted
 }
 
 // -----------------------------
@@ -285,9 +301,13 @@ void AAPlayer::PerformJump()
     // Force jump animation with priority
     if (JumpAnim && AnimInstance)
     {
-        PlayAnimation(JumpAnim, false, true); // Priority = true for jump
+        PlayAnimation(JumpAnim, false, true);
         CurrentAnimationState = TEXT("Jump");
     }
+
+    // --- Notify listeners (JumpScoreZone) without altering existing behavior ---
+    OnPlayerJumped.Broadcast();
+    LOG_SKATE("Broadcast: OnPlayerJumped");
 }
 
 // -----------------------------
@@ -303,6 +323,7 @@ void AAPlayer::MountSkate()
 
     bIsRidingSkate = true;
     CurrentSkateSpeed = BaseSkateSpeed;
+    bCanMove = true;
 
     if (GetCharacterMovement())
     {
@@ -338,6 +359,7 @@ void AAPlayer::DismountSkate()
 
     bIsRidingSkate = false;
     CurrentSkateSpeed = 0.f;
+    bCanMove = false; // Disable movement during dismount
 
     if (GetCharacterMovement())
     {
@@ -358,9 +380,10 @@ void AAPlayer::DismountSkate()
     {
         PlayAnimation(WalkingAnim, true);
         CurrentAnimationState = TEXT("Walking");
+        bCanMove = true; // Re-enable movement if no dismount animation
     }
 
-    LOG_SKATE("Dismounted skate. Now walking (BaseWalkSpeed=%.1f)", BaseWalkSpeed);
+    LOG_SKATE("Dismounted skate. Now walking (BaseWalkSpeed=%.1f, CanMove=%d)", BaseWalkSpeed, bCanMove ? 1 : 0);
 }
 
 void AAPlayer::HandleSkateMovement(float DeltaTime)
@@ -396,44 +419,62 @@ void AAPlayer::PlayAnimation(UAnimSequence* AnimSequence, bool bLoop, bool bPrio
         float PlayLength = AnimSequence->GetPlayLength();
         CurrentAnimEndTime = GetWorld()->GetTimeSeconds() + PlayLength;
         bInPriorityAnimation = bPriority;
+        LOG_SKATE("Playing animation: %s, Loop=%d, Priority=%d, Duration=%.2f", *AnimSequence->GetName(), bLoop, bPriority, PlayLength);
+    }
+    else
+    {
+        LOG_SKATE("PlayAnimation failed: AnimInstance=%d, AnimSequence=%d", AnimInstance != nullptr, AnimSequence != nullptr);
     }
 }
 
 void AAPlayer::UpdateAnimationState()
 {
     if (!AnimInstance || !GetCharacterMovement())
+    {
+        LOG_SKATE("UpdateAnimationState: AnimInstance or CharacterMovement missing");
         return;
+    }
 
     float CurrentTime = GetWorld()->GetTimeSeconds();
     if (CurrentTime < CurrentAnimEndTime)
     {
-        // Do not interrupt ongoing animation
+        LOG_SKATE("UpdateAnimationState: Waiting for animation %s to finish (%.2f/%.2f)", *CurrentAnimationState.ToString(), CurrentTime, CurrentAnimEndTime);
+        // Re-enable movement after dismount animation
+        if (CurrentAnimationState == TEXT("Dismount") && !bCanMove)
+        {
+            bCanMove = true;
+            LOG_SKATE("UpdateAnimationState: Re-enabled movement after Dismount");
+        }
         return;
     }
 
     // Reset priority after animation finishes
     bInPriorityAnimation = false;
+    bCanMove = true; // Ensure movement is enabled after non-priority animations
 
     if (GetCharacterMovement()->IsFalling())
     {
         if (JumpAnim && CurrentAnimationState != TEXT("Jump"))
         {
-            PlayAnimation(JumpAnim, false, true); // Priority for jump
+            PlayAnimation(JumpAnim, false, true);
             CurrentAnimationState = TEXT("Jump");
+            LOG_SKATE("UpdateAnimationState: Transition to Jump");
         }
         return;
     }
 
     float Speed = GetVelocity().Size2D();
+    LOG_SKATE("UpdateAnimationState: Velocity=%.2f, Riding=%d, CanMove=%d", Speed, bIsRidingSkate ? 1 : 0, bCanMove ? 1 : 0);
 
     if (!bIsRidingSkate)
     {
-        if (Speed > 10.f) // threshold for moving
+        if (Speed > 5.f) // Lowered threshold for walking detection
         {
             if (WalkingAnim && CurrentAnimationState != TEXT("Walking"))
             {
                 PlayAnimation(WalkingAnim, true);
                 CurrentAnimationState = TEXT("Walking");
+                LOG_SKATE("UpdateAnimationState: Transition to Walking");
             }
         }
         else
@@ -442,25 +483,28 @@ void AAPlayer::UpdateAnimationState()
             {
                 PlayAnimation(IdleAnim, true);
                 CurrentAnimationState = TEXT("Idle");
+                LOG_SKATE("UpdateAnimationState: Transition to Idle");
             }
         }
     }
     else
     {
-        if (CurrentSkateSpeed > BaseSkateSpeed * 1.2f) // Example threshold for speedup anim
+        if (CurrentSkateSpeed > BaseSkateSpeed * 1.2f)
         {
             if (SpeedupAnim && CurrentAnimationState != TEXT("Speedup"))
             {
                 PlayAnimation(SpeedupAnim, false);
                 CurrentAnimationState = TEXT("Speedup");
+                LOG_SKATE("UpdateAnimationState: Transition to Speedup");
             }
         }
-        else if (CurrentSkateSpeed < BaseSkateSpeed * 0.8f) // Example threshold for slowdown anim
+        else if (CurrentSkateSpeed < BaseSkateSpeed * 0.8f)
         {
             if (SlowdownAnim && CurrentAnimationState != TEXT("Slowdown"))
             {
                 PlayAnimation(SlowdownAnim, false);
                 CurrentAnimationState = TEXT("Slowdown");
+                LOG_SKATE("UpdateAnimationState: Transition to Slowdown");
             }
         }
         else
@@ -469,7 +513,24 @@ void AAPlayer::UpdateAnimationState()
             {
                 PlayAnimation(SkateboardingAnim, true);
                 CurrentAnimationState = TEXT("Skateboarding");
+                LOG_SKATE("UpdateAnimationState: Transition to Skateboarding");
             }
         }
+    }
+}
+
+// -----------------------------
+// Score helpers (for JumpScoreZone)
+// -----------------------------
+void AAPlayer::AddScore(int32 Amount)
+{
+    const int32 Old = Score;
+    Score = FMath::Max(0, Score + Amount);
+    LOG_SKATE("AddScore: Amount=%d, Old=%d, New=%d", Amount, Old, Score);
+
+    // Update HUD
+    if (ScoreHud.IsValid())
+    {
+        ScoreHud->UpdateScore(Score);
     }
 }
