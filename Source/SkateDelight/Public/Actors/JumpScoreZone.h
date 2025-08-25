@@ -15,6 +15,8 @@ class SKATEDELIGHT_API AJumpScoreZone : public AActor
 public:
     AJumpScoreZone();
 
+    virtual void Tick(float DeltaTime) override;
+
 protected:
     virtual void BeginPlay() override;
 
@@ -26,6 +28,15 @@ protected:
 
     UPROPERTY(Transient)
     AAPlayer* OverlappingPlayer;
+
+    UPROPERTY(Transient)
+    bool bWasAirborneOnEntry;
+
+    UPROPERTY(Transient)
+    bool bRemainedAirborne;
+
+    UPROPERTY(Transient)
+    bool bHasJumped;
 
     UFUNCTION()
     void OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
