@@ -1,8 +1,8 @@
 # SkateDelight
 
-Developed with Unreal Engine 5.4
+### Developed with Unreal Engine 5.4
 
-Implemented features:
+### Implemented features:
 
 1. Movement Functionality
 2. Small Designed Level with Jumping obstacles
@@ -16,3 +16,28 @@ obstacles highlight:
 
 <img width="1066" height="664" alt="image" src="https://github.com/user-attachments/assets/9d2cdec5-f880-42ee-8583-a1657c38afe6" />
 
+
+### Controls:
+
+WASD -> movement
+
+Space -> jump
+
+LCtrl -> Slowdown
+
+LShift -> Speedup
+
+
+for mounting the skate:
+
+W + LShift
+
+For unmounting the skate:
+
+LCtrl until the speed is zero, or simply not moving until the speed is zero
+
+<br>
+
+<br>
+
+<br>
